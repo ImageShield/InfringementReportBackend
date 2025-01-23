@@ -32,10 +32,13 @@ exports.handler = async (event) => {
 async function handleInitiateSearch(event) {
     try {
         const body = JSON.parse(event.body);
-        const { base64Image } = body;
+        const { base64Image, fullName, location, employer } = body;
 
-        if (!base64Image) {
-            return createResponse(400, { message: 'Missing required parameter: base64Image' });
+        const requiredFields = { base64Image, fullName, location, employer };
+        for (const [field, value] of Object.entries(requiredFields)) {
+            if (!value) {
+                return createResponse(400, { message: `Missing required parameter: ${field}` });
+            }
         }
 
         const searchId = uuidv4();
@@ -63,6 +66,9 @@ async function handleInitiateSearch(event) {
                 searchId,
                 imageId,
                 s3Key,
+                fullName,
+                location,
+                employer,
                 status: 'processing',
                 timestamp: new Date().toISOString(),
                 progress: 0,
@@ -80,7 +86,10 @@ async function handleInitiateSearch(event) {
                 searchId,
                 imageId,
                 s3Key,
-                imageBase64: base64Image
+                imageBase64: base64Image,
+                fullName,
+                location,
+                employer
             })
         });
 
@@ -105,6 +114,50 @@ async function handleInitiateSearch(event) {
     }
 }
 
+// async function handleGetStatus(event) {
+//     try {
+//         const searchId = event.pathParameters?.searchId;
+        
+//         if (!searchId) {
+//             return createResponse(400, { message: 'Search ID is required' });
+//         }
+
+//         const { Item: search } = await dynamoDB.get({
+//             TableName: SEARCH_METADATA_TABLE,
+//             Key: { searchId }
+//         });
+
+//         if (!search) {
+//             return createResponse(404, { message: 'Search not found' });
+//         }
+
+//         return createResponse(200, {
+//             status: search.status,
+//             progress: search.progress,
+//             results: {
+//                 bing: search.results.bing?.map(match => ({
+//                     title: `Match (${Math.round(match.similarity)}% similar)`,
+//                     url: match.hostPageUrl,
+//                     thumbnailUrl: match.targetUrl,
+//                     source: 'bing'
+//                 })) || [],
+//                 google: search.results.google?.map(match => ({
+//                     title: `Match (${Math.round(match.similarity)}% similar)`,
+//                     url: match.hostPageUrl,
+//                     thumbnailUrl: match.thumbnailUrl || match.targetUrl,
+//                     source: 'google'
+//                 })) || []
+//             },
+//             totalProcessed: search.totalProcessed,
+//             totalAvailable: search.totalAvailable
+//         });
+//     } catch (error) {
+//         log('ERROR', 'Error fetching status', { error: error.message });
+//         return createResponse(500, { message: error.message });
+//     }
+// }
+
+
 async function handleGetStatus(event) {
     try {
         const searchId = event.pathParameters?.searchId;
@@ -122,14 +175,27 @@ async function handleGetStatus(event) {
             return createResponse(404, { message: 'Search not found' });
         }
 
+        // When search is completed, format and return the results
+        const formattedResults = {
+            bing: search.results.bing?.map(match => ({
+                title: `Match (${Math.round(match.similarity)}% similar)`,
+                url: match.hostPageUrl,
+                thumbnailUrl: match.targetUrl,
+                source: 'bing'
+            })) || [],
+            google: search.results.google?.map(match => ({
+                title: `Match (${Math.round(match.similarity)}% similar)`,
+                url: match.hostPageUrl,
+                thumbnailUrl: match.thumbnailUrl || match.targetUrl,
+                source: 'google',
+                searchTerm: match.searchTerm
+            })) || []
+        };
+
         return createResponse(200, {
             status: search.status,
             progress: search.progress,
-            results: search.results?.map(match => ({
-                title: `Match (${Math.round(match.similarity)}% similar)`,
-                url: match.hostPageUrl,
-                thumbnailUrl: match.targetUrl
-            })) || [],
+            results: formattedResults,
             totalProcessed: search.totalProcessed,
             totalAvailable: search.totalAvailable
         });
@@ -138,6 +204,7 @@ async function handleGetStatus(event) {
         return createResponse(500, { message: error.message });
     }
 }
+
 
 function createResponse(statusCode, body) {
     return {
