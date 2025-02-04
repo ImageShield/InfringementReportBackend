@@ -13,144 +13,68 @@ const dynamoDB = DynamoDBDocument.from(dynamoClient);
 const lambda = new Lambda();
 
 // Constants
-const BUCKET_NAME = 'infringementuploads';
-const SEARCH_METADATA_TABLE = 'SearchMetadata';
-const PROCESSOR_LAMBDA = 'PROCESSOR_LAMBDA';
+const PROCESSOR_LAMBDA = process.env.Processor_Lambda
 
 exports.handler = async (event) => {
     log('INFO', 'API Handler Invoked', { path: event.routeKey });
 
+
+        // === 1. Authorization Check ===
+    const authHeader = event.headers?.Authorization || event.headers?.authorization;
+    const EXPECTED_TOKEN = process.env.AUTH_TOKEN || 'YourExpectedAuthToken';
+    if (!authHeader || authHeader !== EXPECTED_TOKEN) {
+        return createResponse(401, { message: 'Unauthorized' });
+    }
+    
+    // === 2. Only Accept POST /upload ===
     if (event.routeKey === 'POST /upload') {
         return await handleUpload(event);
-    } else if (event.routeKey === 'GET /status/{original_id}') {
-        return await handleGetStatus(event);
     }
-
+    
     return createResponse(404, { message: 'Not Found' });
-};
+    };
 
-async function handleUpload(event) {
-    try {
-        const images = JSON.parse(event.body);
-        
-        if (!Array.isArray(images)) {
+    async function handleUpload(event) {
+        try {
+          const images = JSON.parse(event.body);
+          
+          if (!Array.isArray(images)) {
             return createResponse(400, { message: 'Payload must be an array' });
-        }
-
-        // Validate each image entry
-        for (const image of images) {
-            if (!image.original_id && image.original_id !== 0) {
-                return createResponse(400, { message: 'Missing original_id' });
+          }
+          
+          // Here you could also add additional validation per image (e.g. ensure original_id and url exist)
+          for (const image of images) {
+            if (typeof image.original_id !== 'number' || !image.url) {
+              return createResponse(400, { message: 'Each image must have an original_id (number) and a url' });
             }
-            if (!image.url) {
-                return createResponse(400, { message: 'Missing url' });
-            }
-
-            await dynamoDB.put({
-                TableName: 'ImageSearchResults',
-                Item: {
-                    original_id: image.original_id,
-                    status: 'processing',
-                    progress: 0,
-                    matches: [],
-                    timestamp: new Date().toISOString()
-                }
-            });
-        }
-
-        // Process each image asynchronously
-        const processingPromises = images.map(image => 
+          }
+          
+          // === 3. Dispatch Processing Asynchronously ===
+          const processingPromises = images.map((image) =>
             lambda.invoke({
-                FunctionName: PROCESSOR_LAMBDA,
-                InvocationType: 'Event',
-                Payload: JSON.stringify({
-                    original_id: image.original_id,
-                    imageUrl: image.url,
-                    priority: image.priority || 'high'
-                })
+              FunctionName: PROCESSOR_LAMBDA,
+              InvocationType: 'Event', // asynchronous invocation
+              Payload: JSON.stringify({
+                original_id: image.original_id,
+                imageUrl: image.url,
+                // if priority isn’t provided, default to "high"
+                priority: image.priority || 'high'
+              })
             })
-        );
+          );
 
-        await Promise.all(processingPromises);
-
-        return createResponse(202, {
+          await Promise.all(processingPromises);
+    
+          return createResponse(202, {
             message: 'Processing started',
             total_images: images.length
-        });
-
-    } catch (error) {
-        log('ERROR', 'Upload handler error', { error: error.message });
-        return createResponse(500, { message: error.message });
-    }
-}
-
-async function handleGetStatus(event) {
-    try {
-        const originalId = event.pathParameters?.original_id;
-        
-        if (!originalId) {
-            return createResponse(400, { message: 'Original ID is required' });
+          });
+          
+        } catch (error) {
+          log('ERROR', 'Upload handler error', { error: error.message });
+          return createResponse(500, { message: error.message });
         }
-        const idForQuery = Number(originalId) || originalId;
-
-        try {
-            const { Item: result } = await dynamoDB.get({
-                TableName: 'ImageSearchResults',
-                Key: { original_id: idForQuery }
-            });
-
-            if (!result) {
-                return createResponse(404, { 
-                    id: originalId,
-                    img_data: []
-                });
-            }
-
-            if (result.status === 'processing') {
-                return createResponse(200, {
-                    id: originalId,
-                    status: 'processing',
-                    progress: result.progress || 0
-                });
-            } else if (result.status === 'failed') {
-                return createResponse(200, {
-                    id: originalId,
-                    img_data: []
-                });
-            }
-
-            // Format matches array if exists
-            const matches = Array.isArray(result.matches) ? result.matches : [];
-            
-            return createResponse(200, {
-                id: originalId,
-                img_data: matches.map(match => ({
-                    url: match.url,
-                    malicious: match.malicious || false,
-                    false_positive_eligible: match.false_positive_eligible || false
-                }))
-            });
-
-        } catch (dbError) {
-            log('ERROR', 'DynamoDB error', { 
-                error: dbError.message,
-                originalId 
-            });
-            
-            return createResponse(500, {
-                message: 'Database error occurred',
-                id: originalId
-            });
-        }
-
-    } catch (error) {
-        log('ERROR', 'Status handler error', { error: error.message });
-        return createResponse(500, {
-            message: 'Internal server error',
-            id: originalId
-        });
-    }
-}
+      }
 
 function createResponse(statusCode, body) {
     return {
