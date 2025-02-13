@@ -42,6 +42,7 @@ exports.handler = async (event) => {
             return createResponse(400, { message: 'Payload must be an array' });
           }
           
+          log('INFO', 'Received json payload', {images});
           // Here you could also add additional validation per image (e.g. ensure original_id and url exist)
           for (const image of images) {
             if (typeof image.original_id !== 'number' || !image.url) {
@@ -50,25 +51,16 @@ exports.handler = async (event) => {
           }
           
           // === 3. Dispatch Processing Asynchronously ===
-          const processingPromises = images.map((image) =>
-            lambda.invoke({
-              FunctionName: PROCESSOR_LAMBDA,
-              InvocationType: 'Event', // asynchronous invocation
-              Payload: JSON.stringify({
-                original_id: image.original_id,
-                imageUrl: image.url,
-                // if priority isn’t provided, default to "high"
-                priority: image.priority || 'high'
-              })
-            })
-          );
+          await lambda.invoke({
+            FunctionName: PROCESSOR_LAMBDA,
+            InvocationType: 'Event',
+            Payload: JSON.stringify(images)
+        });
 
-          await Promise.all(processingPromises);
-    
-          return createResponse(202, {
+        return createResponse(202, {
             message: 'Processing started',
             total_images: images.length
-          });
+        });
           
         } catch (error) {
           log('ERROR', 'Upload handler error', { error: error.message });

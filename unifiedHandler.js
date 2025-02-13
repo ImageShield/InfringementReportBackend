@@ -20,15 +20,16 @@ const CLEARED_IMAGES_URL = process.env.cleared_image_endpoint;
 
 
 exports.unifiedHandler = async (event) => {
-    const { original_id, imageUrl } = event;
-    log('INFO', 'Processing Lambda Invoked', { original_id, imageUrl });
+    log('INFO', 'Processing Lambda Invoked', { total_images: event.length });
   
+    const clearedImageIds = [];
+    const processingPromises = event.map(async ({ original_id, url: imageUrl }) => {
     try {
       // --- 1. Download and process the source image ---
       const sourceImageBuffer = await processImageUrl(imageUrl);
       if (!sourceImageBuffer) {
         log('ERROR', 'Source image processing failed', { original_id });
-        await notifyCleared(original_id); // Optionally notify cleared images if source image can't be processed
+        clearedImageIds.push(original_id);
         return;
       }
   
@@ -39,70 +40,9 @@ exports.unifiedHandler = async (event) => {
         log('INFO', 'Bing search completed', { original_id, resultsCount: searchResults.length });
       } catch (error) {
         log('ERROR', 'Bing search failed', { original_id, error: error.message });
-        await notifyCleared(original_id);
+        clearedImageIds.push(original_id);
         return;
       }
-  
-      // --- 3. Process results with Rekognition face comparison ---
-  //     const matches = [];
-  //     for (const result of searchResults) {
-  //       if (!isValidUrl(result.targetUrl)) {
-  //         log('WARN', 'Skipping result with invalid target URL', { targetUrl: result.targetUrl });
-  //         continue;
-  //       }
-  //       try {
-  //         const targetImageBuffer = await processImageUrl(result.targetUrl);
-  //         if (!targetImageBuffer) {
-  //           log('WARN', 'Target image processing failed, skipping', {
-  //             url: result.hostPageUrl,
-  //             targetUrl: result.targetUrl
-  //           });
-  //           continue;
-  //         }
-  //         // Compare faces with a similarity threshold
-  //         const compareResponse = await rekognition.send(new CompareFacesCommand({
-  //           SourceImage: { Bytes: sourceImageBuffer },
-  //           TargetImage: { Bytes: targetImageBuffer },
-  //           SimilarityThreshold: 90
-  //         }));
-  
-  //         if (compareResponse.FaceMatches && compareResponse.FaceMatches.length > 0) {
-  //           matches.push({
-  //             url: result.hostPageUrl,
-  //             malicious: false, 
-  //             false_positive_eligible: false
-  //           });
-  //           log('INFO', 'Face match found', {
-  //             url: result.hostPageUrl,
-  //             similarity: compareResponse.FaceMatches[0].Similarity
-  //           });
-  //         }
-  //       } catch (error) {
-  //         log('WARN', 'Failed to process search result', {
-  //           url: result.hostPageUrl,
-  //           targetUrl: result.targetUrl,
-  //           error: error.message
-  //         });
-  //         // Continue with other results
-  //       }
-  //     }
-  
-  //     // --- 4. Notify the external system ---
-  //     if (matches.length > 0) {
-  //       await notifyImageUpdates(original_id, matches);
-  //     } else {
-  //       await notifyCleared(original_id);
-  //     }
-  
-  //   } catch (error) {
-  //     log('ERROR', 'Processing error', { original_id, error: error.message });
-  //     // On error, notify cleared images (or handle as you see fit)
-  //     await notifyCleared(original_id);
-  //   }
-    
-  //   // Optionally, return a result or simply exit
-  //   return;
-  // };
 
   const comparePromises = searchResults.map(async (result) => {
     if (!isValidUrl(result.targetUrl)) {
@@ -156,14 +96,19 @@ exports.unifiedHandler = async (event) => {
   if (matches.length > 0) {
     await notifyImageUpdates(original_id, matches);
   } else {
-    await notifyCleared(original_id);
+    clearedImageIds.push(original_id);
   }
 
 } catch (error) {
   log('ERROR', 'Processing error', { original_id, error: error.message, stack: error.stack });
-  await notifyCleared(original_id);
+  clearedImageIds.push(original_id);
 }
 return;
+});
+await Promise.all(processingPromises);
+if (clearedImageIds.length > 0) {
+  await notifyCleared(clearedImageIds);
+}
 };
 
   function isValidUrl(url) {
@@ -232,63 +177,6 @@ return;
       return null;
     }
   }
-
-
-  // async function performBingSearch(imageBuffer) {
-  //   // Get Bing API URL and key from your secrets or environment variables.
-  //   const secrets = await getSecrets();
-  //   const bingUrl = secrets.BING_API_URL;
-  //   const bingKey = secrets.BING_API_KEY;
-    
-  //   const formData = new FormData();
-  //   formData.append('image', imageBuffer, {
-  //     filename: 'image.jpg',
-  //     contentType: 'image/jpeg'
-  //   });
-    
-  //   log('INFO', 'Sending request to Bing Visual Search API');
-    
-  //   const response = await axios.post(bingUrl, formData, {
-  //     headers: {
-  //       ...formData.getHeaders(),
-  //       'Ocp-Apim-Subscription-Key': bingKey,
-  //     },
-  //     maxContentLength: Infinity,
-  //     maxBodyLength: Infinity
-  //   });
-
-  //   log('INFO', 'Bing response', response.data);
-    
-  //   log('INFO', 'Bing API response received', { status: response.status });
-    
-  //   if (!response.data.tags) {
-  //     throw new Error('Unexpected Bing API response structure.');
-  //   }
-    
-  //   // Parse results: iterate through tags and their actions to extract image URLs.
-  //   const results = [];
-  //   response.data.tags.forEach((tag) => {
-  //     if (tag.actions) {
-  //       tag.actions.forEach((action) => {
-  //         if (action.data && Array.isArray(action.data.value)) {
-  //           action.data.value.forEach((item) => {
-  //             // Log each parsed item for debugging production results.
-  //             log('INFO', 'Parsed Bing search item', { contentUrl: item.contentUrl, hostPageUrl: item.hostPageUrl });
-  //             results.push({
-  //               resultId: uuidv4(),
-  //               hostPageUrl: item.hostPageUrl,
-  //               targetUrl: item.contentUrl,
-  //               timestamp: new Date().toISOString(),
-  //             });
-  //           });
-  //         }
-  //       });
-  //     }
-  //   });
-    
-  //   return results;
-  // }
-
 
   async function performBingSearchWithPagination(imageBuffer) {
     const secrets = await getSecrets();
@@ -366,7 +254,7 @@ return;
       id: original_id,
       img_data: validMatches
     };
-    log('INFO', 'Notifying cleared_images', { IMAGE_UPDATES_URL, API_KEY, payload });
+    log('INFO', 'Notifying cleared_images', { IMAGE_UPDATES_URL, payload });
     try {
       const response = await axios.post(
         IMAGE_UPDATES_URL,
@@ -384,10 +272,10 @@ return;
     }
   }
   // Notify ImageShield of a cleared image (no infringements found).
-  async function notifyCleared(original_id) {
-    log('INFO', 'Notifying cleared_images', { CLEARED_IMAGES_URL, API_KEY, original_id });
+  async function notifyCleared(original_ids) {
     try {
-      const payload = [original_id];
+      const payload = {cleared_image_ids: original_ids};
+      log('INFO', 'Notifying cleared_images', { CLEARED_IMAGES_URL, payload, count: original_ids.length });
       const response = await axios.post(
         CLEARED_IMAGES_URL,
         payload,
@@ -398,9 +286,9 @@ return;
           }
         }
       );
-      log('INFO', 'Successfully notified cleared_images', { response: response.data });
+      log('INFO', 'Successfully notified cleared_images', { response: response.data, count: original_ids.length });
     } catch (error) {
-      log('ERROR', 'Failed to notify cleared_images', { error: error.message });
+      log('ERROR', 'Failed to notify cleared_images', { error: error.message, count: original_ids.length });
     }
   }
 
