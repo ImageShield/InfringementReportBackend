@@ -254,7 +254,7 @@ if (clearedImageIds.length > 0) {
       id: original_id,
       img_data: validMatches
     };
-    log('INFO', 'Notifying cleared_images', { IMAGE_UPDATES_URL, payload });
+    log('INFO', 'Notifying Image_Updates API: ', { IMAGE_UPDATES_URL, payload });
     try {
       const response = await axios.post(
         IMAGE_UPDATES_URL,
